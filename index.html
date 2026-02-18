@@ -778,6 +778,25 @@
             color: white;
             border-color: var(--primary);
         }
+
+        /* Fix untuk tombol tertutup footer */
+        .container {
+            padding-bottom: 140px; /* Naikkan dari 100px */
+        }
+
+        .submit-btn {
+            margin-bottom: 20px; /* Tambah margin bawah */
+        }
+
+        /* Spin animation for sync */
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .spin-icon {
+            animation: spin 1s linear infinite;
+        }
     </style>
 </head>
 <body>
@@ -798,6 +817,30 @@
     </header>
 
     <div class="container">
+        <!-- PWA Install Banner -->
+        <div id="installBanner" class="glass-card" style="display: none; background: var(--gradient-1); border: none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 15px;">
+                <div>
+                    <h4 style="margin-bottom: 5px; display: flex; align-items: center; gap: 8px;">
+                        <i data-lucide="download" style="width: 20px; height: 20px;"></i>
+                        Install PricePedia
+                    </h4>
+                    <p style="font-size: 0.9rem; opacity: 0.9;">Akses offline & scan lebih cepat</p>
+                </div>
+                <button onclick="installPWA()" style="background: white; color: var(--primary); border: none; padding: 12px 20px; border-radius: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;">
+                    Install
+                </button>
+            </div>
+        </div>
+
+        <!-- Installed Badge -->
+        <div id="installedBadge" class="glass-card" style="display: none; background: rgba(16, 185, 129, 0.2); border: 1px solid var(--success);">
+            <div style="display: flex; align-items: center; gap: 10px; color: var(--success);">
+                <i data-lucide="check-circle" style="width: 24px; height: 24px;"></i>
+                <span style="font-weight: 600;">PricePedia Terinstall</span>
+            </div>
+        </div>
+
         <!-- Stats Overview -->
         <div class="stats-grid">
             <div class="stat-box">
@@ -989,15 +1032,49 @@
             isOnline: navigator.onLine,
             currentStore: null,
             scanner: null,
-            products: new Map(), // barcode -> {name, source, isEdited}
-            stores: new Map(),   // id -> {name, location}
-            prices: [],          // all price entries (local only)
-            pendingProductSync: [], // queue for new products to sync
+            products: new Map(),
+            stores: new Map(),
+            prices: [],
+            pendingProductSync: [],
             currentBarcode: null,
             isNewProduct: false,
             isEditingName: false,
-            originalProductName: null // To track if user edited the name
+            originalProductName: null
         };
+
+        // >>> TARUH DI SINI <<<
+        // PWA Install State
+        let deferredPrompt = null;
+        let isInstalled = false;
+
+        // Deteksi installed
+        if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true) {
+            isInstalled = true;
+        }
+
+        // Catch beforeinstallprompt
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            if (!isInstalled) {
+                document.getElementById('installBanner').style.display = 'block';
+            }
+        });
+
+        window.addEventListener('appinstalled', () => {
+            isInstalled = true;
+            document.getElementById('installBanner').style.display = 'none';
+            document.getElementById('installedBadge').style.display = 'block';
+            deferredPrompt = null;
+        });
+
+        function installPWA() {
+            if (!deferredPrompt) return;
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then((choiceResult) => {
+                deferredPrompt = null;
+            });
+        }
 
         // ==========================================
         // INITIALIZATION
@@ -1258,19 +1335,38 @@
 
         function queueProductForCrowdSync(product) {
             return new Promise((resolve, reject) => {
-                const transaction = db.transaction(['pendingProducts'], 'readwrite');
-                const store = transaction.objectStore('pendingProducts');
-                const item = {
-                    timestamp: new Date().toISOString(),
-                    type: 'newProduct',
-                    data: product
-                };
-                const request = store.add(item);
-                request.onsuccess = () => {
-                    state.pendingProductSync.push(item);
-                    resolve();
-                };
-                request.onerror = () => reject(request.error);
+                try {
+                    const transaction = db.transaction(['pendingProducts'], 'readwrite');
+                    const store = transaction.objectStore('pendingProducts');
+                    
+                    const item = {
+                        timestamp: new Date().toISOString(),
+                        type: 'newProduct',
+                        data: {
+                            barcode: product.barcode,
+                            name: product.name,
+                            createdAt: product.createdAt
+                        }
+                    };
+                    
+                    const request = store.add(item);
+                    
+                    request.onsuccess = () => {
+                        state.pendingProductSync.push(item);
+                        updateSyncStatus();
+                        resolve();
+                    };
+                    
+                    request.onerror = () => reject(request.error);
+                    
+                    transaction.oncomplete = () => {
+                        if (state.isOnline) {
+                            setTimeout(() => syncPendingData(), 1000);
+                        }
+                    };
+                } catch (error) {
+                    reject(error);
+                }
             });
         }
 
@@ -1486,13 +1582,21 @@
         // SYNC & NETWORK (CROWD ONLY)
         // ==========================================
         async function syncPendingData() {
-            if (!state.isOnline || state.pendingProductSync.length === 0) return;
+            if (!state.isOnline || state.pendingProductSync.length === 0) {
+                updateSyncStatus();
+                return;
+            }
             
             const pending = [...state.pendingProductSync];
+            let successCount = 0;
+            let failCount = 0;
             
             for (const item of pending) {
                 if (item.type === 'newProduct') {
                     try {
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 10000);
+                        
                         const response = await fetch(GAS_URL, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -1501,38 +1605,47 @@
                                 barcode: item.data.barcode,
                                 name: item.data.name,
                                 createdAt: item.data.createdAt
-                            })
+                            }),
+                            signal: controller.signal
                         });
                         
+                        clearTimeout(timeoutId);
                         const result = await response.json();
                         
                         if (result.success) {
-                            // Remove from pending
                             await removeFromPending(item.timestamp);
+                            successCount++;
                             
-                            // Update local product to confirmed crowd status
                             const product = await getProduct(item.data.barcode);
                             if (product) {
                                 product.source = 'crowd';
+                                product.synced = true;
                                 await saveProduct(product);
                                 state.products.set(item.data.barcode, product);
                             }
-                            
-                            showToast('Sync Berhasil', `"${item.data.name}" masuk ke database crowd!`, 'success');
+                        } else if (result.error === 'Barcode sudah ada') {
+                            await removeFromPending(item.timestamp);
+                            successCount++;
+                        } else {
+                            failCount++;
                         }
                     } catch (error) {
-                        console.error('Sync error:', error);
-                        break;
+                        failCount++;
+                        if (error.name === 'TypeError' || error.name === 'AbortError') break;
                     }
                 }
             }
             
-            // Reload pending
             const pendingTx = db.transaction(['pendingProducts'], 'readonly');
             const pendingStore = pendingTx.objectStore('pendingProducts');
             state.pendingProductSync = await pendingStore.getAll();
             
+            updateSyncStatus();
             updateStats();
+            
+            if (successCount > 0) {
+                showToast('Sync Selesai', `${successCount} produk tersinkron`, 'success');
+            }
         }
 
         function removeFromPending(timestamp) {
@@ -1591,18 +1704,27 @@
 
         function updateSyncStatus() {
             const statusEl = document.getElementById('syncStatus');
+            const pendingCount = state.pendingProductSync.length;
+            
             if (state.isOnline) {
-                const pendingCount = state.pendingProductSync.length;
-                statusEl.className = 'sync-status online';
-                statusEl.innerHTML = `
-                    <i data-lucide="wifi" style="width: 14px; height: 14px;"></i>
-                    <span>Online${pendingCount > 0 ? ` (${pendingCount} produk pending)` : ''}</span>
-                `;
+                if (pendingCount > 0) {
+                    statusEl.className = 'sync-status online';
+                    statusEl.innerHTML = `
+                        <i data-lucide="sync" class="spin-icon" style="width: 14px; height: 14px;"></i>
+                        <span>Sync ${pendingCount}...</span>
+                    `;
+                } else {
+                    statusEl.className = 'sync-status online';
+                    statusEl.innerHTML = `
+                        <i data-lucide="check-circle" style="width: 14px; height: 14px;"></i>
+                        <span>Sync OK</span>
+                    `;
+                }
             } else {
                 statusEl.className = 'sync-status offline';
                 statusEl.innerHTML = `
                     <i data-lucide="wifi-off" style="width: 14px; height: 14px;"></i>
-                    <span>Offline (${state.pendingProductSync.length} menunggu)</span>
+                    <span>Offline (${pendingCount})</span>
                 `;
             }
             lucide.createIcons();
