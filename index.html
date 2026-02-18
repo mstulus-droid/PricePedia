@@ -329,37 +329,51 @@
         .modal-title { font-size: 1.25rem; font-weight: 700; }
         .close-modal { background: none; border: none; color: var(--text-muted); cursor: pointer; }
 
-        /* --- Detail History List --- */
-        .history-list {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-top: 16px;
-        }
-        
-        .history-item {
-            display: flex;
-            align-items: center;
-            padding: 12px;
-            background: rgba(0,0,0,0.2);
+        /* --- REVISI: Accordion History Styles --- */
+        .history-accordion-item {
+            background: rgba(255,255,255,0.03);
             border-radius: 12px;
+            margin-bottom: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.05);
         }
         
-        .history-date {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            width: 80px;
-        }
-        
-        .history-store {
-            flex: 1;
+        .history-accordion-header {
+            padding: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
             font-weight: 600;
+            background: rgba(255,255,255,0.02);
+            transition: background 0.2s;
+        }
+        
+        .history-accordion-header:active {
+            background: rgba(255,255,255,0.05);
+        }
+        
+        .accordion-icon {
+            width: 18px; 
+            height: 18px; 
+            color: var(--text-muted);
+            transition: transform 0.3s ease;
+        }
+
+        .history-accordion-content {
+            padding: 0 14px 14px 14px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            background: rgba(0,0,0,0.1);
+        }
+
+        .history-item-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
             font-size: 0.9rem;
         }
-        
-        .history-price {
-            font-weight: 700;
-        }
+        .history-item-row:last-child { border-bottom: none; }
         
         .trend-icon {
             margin-left: 8px;
@@ -639,7 +653,7 @@
             <div id="detailComparisonList"></div>
 
             <!-- History Chart/List -->
-            <h4 style="margin: 20px 0 10px 0;">Riwayat Harga (Semua Toko)</h4>
+            <h4 style="margin: 20px 0 10px 0;">Riwayat Harga (Detail per Toko)</h4>
             <div id="detailHistoryList" class="history-list"></div>
 
             <!-- Update Price Button (Sticky) -->
@@ -1112,8 +1126,21 @@
             return Array.from(map.values());
         }
 
+        function toggleHistory(headerElement) {
+            const content = headerElement.nextElementSibling;
+            const icon = headerElement.querySelector('.accordion-icon');
+            
+            if (content.style.display === 'none' || content.style.display === '') {
+                content.style.display = 'block';
+                icon.style.transform = 'rotate(180deg)';
+            } else {
+                content.style.display = 'none';
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
         function openProductDetail(barcode) {
-            state.currentBarcode = barcode; // Ensure current barcode is set for update button
+            state.currentBarcode = barcode;
             const product = state.products.get(barcode);
             if (!product) return;
 
@@ -1153,33 +1180,75 @@
                 compList.innerHTML = '<p style="font-size:0.8rem; color:var(--text-muted);">Belum ada data perbandingan</p>';
             }
 
-            // 3. History List (Global)
-            const allPrices = state.prices.filter(p => p.barcode === barcode)
-                                          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); // Newest first
+            // 3. REVISI: History List (Grouped by Store + Accordion)
+            const allPrices = state.prices.filter(p => p.barcode === barcode);
+            
+            // Group by Store ID
+            const pricesByStore = {};
+            allPrices.forEach(p => {
+                if (!pricesByStore[p.storeId]) {
+                    pricesByStore[p.storeId] = [];
+                }
+                pricesByStore[p.storeId].push(p);
+            });
+            
+            // Filter: Only stores with > 1 entry
+            const validStoreIds = Object.keys(pricesByStore).filter(id => pricesByStore[id].length > 1);
             
             const histList = document.getElementById('detailHistoryList');
-            if (allPrices.length > 0) {
-                histList.innerHTML = allPrices.map((p, index) => {
-                    const store = state.stores.find(s => s.id === p.storeId);
-                    const date = new Date(p.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-                    
-                    // Compare with next item (which is older in time) to show trend
-                    let trend = '';
-                    if (index < allPrices.length - 1) {
-                        const prevPrice = allPrices[index + 1].price;
-                        if (p.price > prevPrice) trend = `<span class="trend-icon trend-up">▲</span>`; // Mahal
-                        else if (p.price < prevPrice) trend = `<span class="trend-icon trend-down">▼</span>`; // Murah
-                    }
+            histList.innerHTML = ''; // Clear old
 
-                    return `
-                    <div class="history-item">
-                        <div class="history-date">${date}</div>
-                        <div class="history-store">${store ? store.name : 'Unknown'}</div>
-                        <div class="history-price">Rp ${p.price.toLocaleString('id-ID')} ${trend}</div>
-                    </div>`;
-                }).join('');
+            if (validStoreIds.length === 0) {
+                 histList.innerHTML = '<p style="font-size:0.8rem; color:var(--text-muted); text-align:center; padding:10px;">Belum ada riwayat perubahan harga (minimal 2x input di toko yang sama).</p>';
             } else {
-                histList.innerHTML = '<p style="font-size:0.8rem; color:var(--text-muted);">Belum ada histori</p>';
+                validStoreIds.forEach(storeId => {
+                    // Sort by newest first
+                    const storePrices = pricesByStore[storeId].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                    const store = state.stores.find(s => s.id == storeId);
+                    const storeName = store ? store.name : 'Unknown';
+
+                    // Create Accordion HTML
+                    const item = document.createElement('div');
+                    item.className = 'history-accordion-item';
+                    
+                    const header = document.createElement('div');
+                    header.className = 'history-accordion-header';
+                    header.onclick = function() { toggleHistory(this); };
+                    header.innerHTML = `
+                        <span>${storeName} <span style="font-size:0.75rem; color:var(--text-muted); font-weight:normal;">(${storePrices.length}x Input)</span></span>
+                        <i data-lucide="chevron-down" class="accordion-icon"></i>
+                    `;
+                    
+                    const content = document.createElement('div');
+                    content.className = 'history-accordion-content';
+                    content.style.display = 'none'; // Default closed
+                    
+                    let contentHtml = '';
+                    storePrices.forEach((p, index) => {
+                        const date = new Date(p.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: '2-digit' });
+                        
+                        // Trend Analysis (Compare with older/next item in list)
+                        let trend = '';
+                        if (index < storePrices.length - 1) {
+                             const prevPrice = storePrices[index + 1].price;
+                             if (p.price > prevPrice) trend = `<span class="trend-icon trend-up">▲</span>`; 
+                             else if (p.price < prevPrice) trend = `<span class="trend-icon trend-down">▼</span>`;
+                             else trend = `<span class="trend-icon" style="color:var(--text-muted);">=</span>`;
+                        }
+
+                        contentHtml += `
+                            <div class="history-item-row">
+                                <span class="history-date">${date}</span>
+                                <span class="history-price">Rp ${p.price.toLocaleString('id-ID')} ${trend}</span>
+                            </div>
+                        `;
+                    });
+                    
+                    content.innerHTML = contentHtml;
+                    item.appendChild(header);
+                    item.appendChild(content);
+                    histList.appendChild(item);
+                });
             }
 
             document.getElementById('productModal').classList.add('open');
