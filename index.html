@@ -454,6 +454,16 @@
             margin-bottom: 20px;
             display: none; /* Hidden by default */
         }
+        
+        /* Sticky Update Button in Modal */
+        .modal-sticky-footer {
+            position: sticky;
+            bottom: -24px;
+            margin: 20px -24px -24px -24px;
+            padding: 16px 24px;
+            background: #1e293b;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
 
     </style>
 </head>
@@ -534,10 +544,7 @@
             </div>
 
             <div id="searchResults">
-                <div style="text-align: center; padding: 40px; color: var(--text-muted);">
-                    <i data-lucide="search" style="width: 48px; height: 48px; margin-bottom: 10px; opacity: 0.5;"></i>
-                    <p>Ketik nama barang untuk mencari</p>
-                </div>
+                <!-- List will be populated here by default -->
             </div>
         </section>
 
@@ -634,6 +641,13 @@
             <!-- History Chart/List -->
             <h4 style="margin: 20px 0 10px 0;">Riwayat Harga (Semua Toko)</h4>
             <div id="detailHistoryList" class="history-list"></div>
+
+            <!-- Update Price Button (Sticky) -->
+             <div class="modal-sticky-footer">
+                <button class="btn btn-primary" onclick="prepareUpdatePrice()">
+                    <i data-lucide="edit-2"></i> Update Harga Barang Ini
+                </button>
+             </div>
         </div>
     </div>
 
@@ -755,6 +769,7 @@
             state.prices = await getAllFromStore(txPrice.objectStore('prices'));
             
             renderStoreSelector();
+            renderRecentList(); // Initialize Compare tab with recent data
         }
 
         function getAllFromStore(store) {
@@ -829,21 +844,23 @@
 
         function onScanSuccess(decodedText) {
             stopScan();
-            document.getElementById('barcodeInput').value = decodedText;
-            state.currentBarcode = decodedText;
             
-            // Auto fill name if exists
+            // Logic: Check if product exists first
             const product = state.products.get(decodedText);
+            
             if (product) {
-                document.getElementById('productNameInput').value = product.name;
-                // Focus price
-                document.getElementById('priceInput').focus();
+                // Product exists! Show Detail Modal immediately for Comparison/History
+                state.currentBarcode = decodedText; // Temporarily save scanned code
+                openProductDetail(decodedText);
+                showToast("Produk ditemukan!", "success");
             } else {
+                // New product: Pre-fill form
+                document.getElementById('barcodeInput').value = decodedText;
+                state.currentBarcode = decodedText;
                 document.getElementById('productNameInput').value = '';
                 document.getElementById('productNameInput').focus();
+                showToast("Barcode baru terdeteksi!", "success");
             }
-            
-            showToast("Barcode terdeteksi!", "success");
         }
 
         // ==========================================
@@ -868,7 +885,8 @@
         function selectStore(id, element) {
             document.querySelectorAll('.store-chip').forEach(c => c.classList.remove('active'));
             element.classList.add('active');
-            document.getElementById('selectedStoreId').value = id;
+            // Ensure ID is stored as proper value (integer mostly handled by logic, but ensuring string value matches)
+            document.getElementById('selectedStoreId').value = id; 
         }
 
         function openManageStores() {
@@ -930,12 +948,13 @@
             const barcode = document.getElementById('barcodeInput').value.trim();
             const name = document.getElementById('productNameInput').value.trim();
             const price = parseInt(document.getElementById('priceInput').value);
-            const storeId = parseInt(document.getElementById('selectedStoreId').value);
+            const rawStoreId = document.getElementById('selectedStoreId').value;
+            const storeId = parseInt(rawStoreId);
             
             // Validations
             if (!barcode) return showToast("Scan barcode dulu!", "error");
             if (!name) return showToast("Isi nama produk!", "error");
-            if (!storeId) return showToast("Pilih toko!", "error");
+            if (!rawStoreId) return showToast("Pilih toko!", "error");
             if (isNaN(price) || price <= 0) return showToast("Harga tidak valid!", "error");
 
             // 1. Save/Update Product
@@ -958,6 +977,7 @@
                 state.prices.push(priceData);
                 showToast("Harga tersimpan!", "success");
                 resetForm();
+                renderRecentList(); // Update the compare list
             };
         }
 
@@ -973,15 +993,66 @@
         // ==========================================
         // SEARCH & DETAIL LOGIC
         // ==========================================
+        
+        // New Function: Render default list (Recent Items)
+        function renderRecentList() {
+             const container = document.getElementById('searchResults');
+             const searchInput = document.getElementById('searchInput');
+             
+             // Only render if search is empty
+             if(searchInput.value.trim() !== "") return;
+
+             if (state.prices.length === 0) {
+                 container.innerHTML = `
+                    <div style="text-align: center; padding: 40px; color: var(--text-muted);">
+                        <i data-lucide="shopping-bag" style="width: 48px; height: 48px; margin-bottom: 10px; opacity: 0.5;"></i>
+                        <p>Belum ada data belanja.</p>
+                    </div>`;
+                 lucide.createIcons();
+                 return;
+             }
+
+             // Get unique products, sorted by latest price timestamp
+             // 1. Group prices by barcode
+             const productMap = new Map();
+             state.prices.forEach(p => {
+                 if(!productMap.has(p.barcode) || new Date(p.timestamp) > new Date(productMap.get(p.barcode).timestamp)) {
+                     productMap.set(p.barcode, p);
+                 }
+             });
+             
+             // 2. Sort by timestamp descending
+             const sortedRecent = Array.from(productMap.values()).sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+             
+             // 3. Render
+             let html = `<h4 style="margin: 0 0 10px 4px; font-size: 0.85rem; color: var(--text-muted); text-transform:uppercase; letter-spacing:1px;">Baru Diupdate</h4>`;
+             
+             html += sortedRecent.map(item => {
+                 const product = state.products.get(item.barcode);
+                 const storeName = state.stores.find(s => s.id === item.storeId)?.name || 'Unknown';
+                 if (!product) return '';
+
+                 return `
+                <div class="result-item" onclick="openProductDetail('${item.barcode}')">
+                    <div class="result-info">
+                        <h4>${product.name}</h4>
+                        <p>${item.barcode}</p>
+                    </div>
+                    <div class="result-price">
+                        <div class="main">Rp ${item.price.toLocaleString('id-ID')}</div>
+                        <div class="sub">di ${storeName}</div>
+                    </div>
+                </div>`;
+             }).join('');
+             
+             container.innerHTML = html;
+             lucide.createIcons();
+        }
+
         function handleSearch(query) {
             const container = document.getElementById('searchResults');
             if (!query) {
-                container.innerHTML = `
-                    <div style="text-align: center; padding: 40px; color: var(--text-muted);">
-                        <i data-lucide="search" style="width: 48px; height: 48px; margin-bottom: 10px; opacity: 0.5;"></i>
-                        <p>Ketik nama barang...</p>
-                    </div>`;
-                lucide.createIcons();
+                renderRecentList(); // Show recent list if query is empty
                 return;
             }
 
@@ -1042,6 +1113,7 @@
         }
 
         function openProductDetail(barcode) {
+            state.currentBarcode = barcode; // Ensure current barcode is set for update button
             const product = state.products.get(barcode);
             if (!product) return;
 
@@ -1057,50 +1129,88 @@
                 
                 document.getElementById('detailBestPrice').textContent = `Rp ${best.price.toLocaleString('id-ID')}`;
                 document.getElementById('detailBestStore').textContent = `di ${store ? store.name : 'Unknown'}`;
+            } else {
+                document.getElementById('detailBestPrice').textContent = "-";
+                document.getElementById('detailBestStore').textContent = "-";
             }
 
             // 2. Comparison List
             const compList = document.getElementById('detailComparisonList');
-            compList.innerHTML = latestPrices.sort((a,b) => a.price - b.price).map(p => {
-                const store = state.stores.find(s => s.id === p.storeId);
-                const isBest = p.price === latestPrices[0].price; // Since sorted, index 0 is best
-                
-                return `
-                <div style="display:flex; justify-content:space-between; padding:10px; border-bottom:1px solid rgba(255,255,255,0.05);">
-                    <span>${store ? store.name : 'Unknown'}</span>
-                    <span style="font-weight:700; color: ${isBest ? 'var(--success)' : 'white'}">
-                        Rp ${p.price.toLocaleString('id-ID')}
-                    </span>
-                </div>`;
-            }).join('');
+            if (latestPrices.length > 0) {
+                compList.innerHTML = latestPrices.sort((a,b) => a.price - b.price).map(p => {
+                    const store = state.stores.find(s => s.id === p.storeId);
+                    const isBest = p.price === latestPrices[0].price; // Since sorted, index 0 is best
+                    
+                    return `
+                    <div style="display:flex; justify-content:space-between; padding:10px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                        <span>${store ? store.name : 'Unknown'}</span>
+                        <span style="font-weight:700; color: ${isBest ? 'var(--success)' : 'white'}">
+                            Rp ${p.price.toLocaleString('id-ID')}
+                        </span>
+                    </div>`;
+                }).join('');
+            } else {
+                compList.innerHTML = '<p style="font-size:0.8rem; color:var(--text-muted);">Belum ada data perbandingan</p>';
+            }
 
             // 3. History List (Global)
             const allPrices = state.prices.filter(p => p.barcode === barcode)
                                           .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); // Newest first
             
             const histList = document.getElementById('detailHistoryList');
-            histList.innerHTML = allPrices.map((p, index) => {
-                const store = state.stores.find(s => s.id === p.storeId);
-                const date = new Date(p.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-                
-                // Compare with next item (which is older in time) to show trend
-                let trend = '';
-                if (index < allPrices.length - 1) {
-                    const prevPrice = allPrices[index + 1].price;
-                    if (p.price > prevPrice) trend = `<span class="trend-icon trend-up">▲</span>`; // Mahal
-                    else if (p.price < prevPrice) trend = `<span class="trend-icon trend-down">▼</span>`; // Murah
-                }
+            if (allPrices.length > 0) {
+                histList.innerHTML = allPrices.map((p, index) => {
+                    const store = state.stores.find(s => s.id === p.storeId);
+                    const date = new Date(p.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+                    
+                    // Compare with next item (which is older in time) to show trend
+                    let trend = '';
+                    if (index < allPrices.length - 1) {
+                        const prevPrice = allPrices[index + 1].price;
+                        if (p.price > prevPrice) trend = `<span class="trend-icon trend-up">▲</span>`; // Mahal
+                        else if (p.price < prevPrice) trend = `<span class="trend-icon trend-down">▼</span>`; // Murah
+                    }
 
-                return `
-                <div class="history-item">
-                    <div class="history-date">${date}</div>
-                    <div class="history-store">${store ? store.name : 'Unknown'}</div>
-                    <div class="history-price">Rp ${p.price.toLocaleString('id-ID')} ${trend}</div>
-                </div>`;
-            }).join('');
+                    return `
+                    <div class="history-item">
+                        <div class="history-date">${date}</div>
+                        <div class="history-store">${store ? store.name : 'Unknown'}</div>
+                        <div class="history-price">Rp ${p.price.toLocaleString('id-ID')} ${trend}</div>
+                    </div>`;
+                }).join('');
+            } else {
+                histList.innerHTML = '<p style="font-size:0.8rem; color:var(--text-muted);">Belum ada histori</p>';
+            }
 
             document.getElementById('productModal').classList.add('open');
             lucide.createIcons();
+        }
+
+        // Action when user clicks "Update Harga Ini" from Modal
+        function prepareUpdatePrice() {
+            const barcode = state.currentBarcode;
+            const product = state.products.get(barcode);
+            
+            if (!barcode || !product) return;
+
+            // Close modal
+            closeProductModal();
+
+            // Switch to Scan tab
+            switchTab('scanSection', document.querySelector('.bottom-nav .nav-item:first-child'));
+
+            // Fill form
+            document.getElementById('barcodeInput').value = barcode;
+            document.getElementById('productNameInput').value = product.name;
+            document.getElementById('priceInput').value = '';
+            
+            // Highlight Store Selector to prompt user
+            document.getElementById('storeSelector').style.border = '1px solid var(--primary)';
+            setTimeout(() => {
+                document.getElementById('storeSelector').style.border = 'none';
+            }, 1000);
+
+            showToast("Silakan masukkan harga baru", "info");
         }
 
         function closeProductModal() {
@@ -1139,6 +1249,9 @@
 
             if (sectionId === 'settingsSection') {
                 // Refresh export data logic if needed
+            } else if (sectionId === 'compareSection') {
+                // Render recent items if search is empty
+                renderRecentList();
             }
         }
 
@@ -1150,6 +1263,9 @@
             if (type === 'error') {
                 icon.style.color = 'var(--danger)';
                 icon.setAttribute('data-lucide', 'x-circle');
+            } else if (type === 'info') {
+                icon.style.color = 'var(--primary)';
+                icon.setAttribute('data-lucide', 'info');
             } else {
                 icon.style.color = 'var(--success)';
                 icon.setAttribute('data-lucide', 'check-circle');
