@@ -95,6 +95,36 @@
             gap: 8px;
         }
 
+        .studio-link {
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: #fff;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, rgba(236,72,153,0.35), rgba(139,92,246,0.35));
+            border: 1px solid rgba(255,255,255,0.18);
+            box-shadow: 0 8px 18px rgba(139,92,246,0.25);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .studio-link:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 22px rgba(236,72,153,0.35);
+        }
+
+        .studio-link-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 0 0 rgba(16,185,129,0.8);
+            animation: pulseDot 1.8s infinite;
+        }
+
         /* --- Components --- */
         .container {
             padding: 20px;
@@ -393,6 +423,41 @@
             margin-bottom: 8px;
         }
 
+        .store-manage-item.dragging {
+            opacity: 0.55;
+            border: 1px dashed rgba(139, 92, 246, 0.6);
+        }
+
+        .store-manage-main {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .store-drag-handle {
+            cursor: grab;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+        }
+
+        .store-drag-handle:active {
+            cursor: grabbing;
+        }
+
+        .store-manage-name {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 250px;
+        }
+
+        .store-manage-actions {
+            display: flex;
+            gap: 8px;
+        }
+
         /* --- Bottom Nav --- */
         .bottom-nav {
             position: fixed;
@@ -461,6 +526,11 @@
         .section.active { display: block; animation: fadeIn 0.4s ease; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        @keyframes pulseDot {
+            0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.8); }
+            70% { box-shadow: 0 0 0 8px rgba(16,185,129,0); }
+            100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+        }
 
         /* Install PWA Button Style */
         .pwa-install-btn {
@@ -489,10 +559,10 @@
         <div class="brand">
             <i data-lucide="scan-barcode"></i> PricePedia
         </div>
-        <div id="connectionStatus" style="font-size: 0.8rem; color: var(--success); display:flex; align-items:center; gap:5px;">
-            <div style="width:8px; height:8px; background:var(--success); border-radius:50%;"></div>
-            Online
-        </div>
+        <a href="https://studio.rhadzor.id" target="_blank" rel="noopener noreferrer" class="studio-link">
+            <span class="studio-link-dot"></span>
+            Rhadzor Studio
+        </a>
     </header>
 
     <div class="container">
@@ -535,7 +605,7 @@
 
                 <div class="form-group">
                     <label class="form-label">Harga (Rp)</label>
-                    <input type="number" id="priceInput" class="input-box" style="font-size: 1.25rem; font-weight: 700; color: var(--primary);" placeholder="0">
+                    <input type="text" inputmode="numeric" id="priceInput" class="input-box" style="font-size: 1.25rem; font-weight: 700; color: var(--primary);" placeholder="0" autocomplete="off">
                 </div>
 
                 <button class="btn btn-primary" onclick="submitPrice()">
@@ -683,6 +753,9 @@
             <div id="manageStoreList" style="max-height: 400px; overflow-y: auto;">
                 <!-- Stores list -->
             </div>
+            <p style="margin-top: 10px; font-size: 0.78rem; color: var(--text-muted);">
+                Gunakan tombol edit/hapus atau drag handle untuk geser urutan toko.
+            </p>
         </div>
     </div>
 
@@ -723,6 +796,7 @@
 
         // PWA Install State
         let deferredPrompt;
+        let draggedStoreId = null;
 
         // ==========================================
         // DATABASE (IndexedDB)
@@ -766,7 +840,7 @@
         async function loadData() {
             // Load Stores
             const txStore = db.transaction(['stores'], 'readonly');
-            state.stores = await getAllFromStore(txStore.objectStore('stores'));
+            state.stores = normalizeStores(await getAllFromStore(txStore.objectStore('stores')));
 
             // Seed default stores if empty
             if (state.stores.length === 0) {
@@ -776,6 +850,7 @@
             // Load Products
             const txProd = db.transaction(['products'], 'readonly');
             const prods = await getAllFromStore(txProd.objectStore('products'));
+            state.products.clear();
             prods.forEach(p => state.products.set(p.barcode, p));
 
             // Load Prices
@@ -794,12 +869,13 @@
         }
 
         async function seedDefaultStores() {
+            const now = Date.now();
             const defaults = [
-                { name: 'Indomaret' },
-                { name: 'Alfamart' },
-                { name: 'Superindo' },
-                { name: 'Pasar Tradisional' },
-                { name: 'Warung Tetangga' }
+                { name: 'Indomaret', sortOrder: now + 5, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() },
+                { name: 'Alfamart', sortOrder: now + 4, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() },
+                { name: 'Superindo', sortOrder: now + 3, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() },
+                { name: 'Pasar Tradisional', sortOrder: now + 2, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() },
+                { name: 'Warung Tetangga', sortOrder: now + 1, createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() }
             ];
             
             const tx = db.transaction(['stores'], 'readwrite');
@@ -813,7 +889,7 @@
                 tx.oncomplete = async () => {
                     // Reload state after seed
                     const tx2 = db.transaction(['stores'], 'readonly');
-                    state.stores = await getAllFromStore(tx2.objectStore('stores'));
+                    state.stores = normalizeStores(await getAllFromStore(tx2.objectStore('stores')));
                     resolve();
                 };
             });
@@ -880,11 +956,77 @@
         // ==========================================
         // STORE MANAGEMENT
         // ==========================================
+        function normalizeStores(stores) {
+            return stores.map((store, index) => {
+                const fallbackOrder = Date.now() - index;
+                return {
+                    ...store,
+                    createdAt: store.createdAt || new Date().toISOString(),
+                    updatedAt: store.updatedAt || store.createdAt || new Date().toISOString(),
+                    lastUsedAt: store.lastUsedAt || null,
+                    sortOrder: typeof store.sortOrder === 'number' ? store.sortOrder : fallbackOrder
+                };
+            });
+        }
+
+        function getStoresSorted() {
+            return [...state.stores].sort((a, b) => (b.sortOrder || 0) - (a.sortOrder || 0));
+        }
+
+        async function persistStores(storesToPersist) {
+            const tx = db.transaction(['stores'], 'readwrite');
+            const storeDb = tx.objectStore('stores');
+            storesToPersist.forEach((store) => storeDb.put(store));
+            return new Promise((resolve) => {
+                tx.oncomplete = () => resolve();
+            });
+        }
+
+        async function touchStoreOrder(storeId, reason = 'update') {
+            const idx = state.stores.findIndex((s) => s.id === storeId);
+            if (idx === -1) return;
+
+            const now = Date.now();
+            const updated = {
+                ...state.stores[idx],
+                updatedAt: new Date(now).toISOString(),
+                sortOrder: now
+            };
+
+            if (reason === 'input') {
+                updated.lastUsedAt = new Date(now).toISOString();
+            }
+
+            state.stores[idx] = updated;
+            await persistStores([updated]);
+            renderStoreSelector();
+        }
+
+        async function reorderStoresByIds(storeIds) {
+            const base = Date.now() + storeIds.length + 1;
+            const updatedStores = [];
+
+            storeIds.forEach((id, index) => {
+                const target = state.stores.find((s) => s.id === id);
+                if (!target) return;
+                const updated = {
+                    ...target,
+                    sortOrder: base - index,
+                    updatedAt: new Date().toISOString()
+                };
+                updatedStores.push(updated);
+            });
+
+            state.stores = state.stores.map((store) => updatedStores.find((x) => x.id === store.id) || store);
+            await persistStores(updatedStores);
+            renderStoreSelector();
+        }
+
         function renderStoreSelector() {
             const container = document.getElementById('storeSelector');
             container.innerHTML = '';
             
-            state.stores.forEach(store => {
+            getStoresSorted().forEach(store => {
                 const chip = document.createElement('div');
                 chip.className = 'store-chip';
                 chip.innerHTML = `<i data-lucide="store" width="14"></i> ${store.name}`;
@@ -907,14 +1049,35 @@
             const list = document.getElementById('manageStoreList');
             list.innerHTML = '';
             
-            state.stores.forEach(store => {
+            const orderedStores = getStoresSorted();
+            orderedStores.forEach((store, index) => {
                 const item = document.createElement('div');
                 item.className = 'store-manage-item';
+                item.dataset.id = String(store.id);
+                item.draggable = true;
+                item.addEventListener('dragstart', onStoreDragStart);
+                item.addEventListener('dragover', onStoreDragOver);
+                item.addEventListener('drop', onStoreDrop);
+                item.addEventListener('dragend', onStoreDragEnd);
                 item.innerHTML = `
-                    <span>${store.name}</span>
-                    <button class="btn-icon" style="color:var(--danger);" onclick="deleteStore(${store.id})">
-                        <i data-lucide="trash-2"></i>
-                    </button>
+                    <div class="store-manage-main">
+                        <span class="store-drag-handle"><i data-lucide="grip-vertical"></i></span>
+                        <span class="store-manage-name">${store.name}</span>
+                    </div>
+                    <div class="store-manage-actions">
+                        <button class="btn-icon" onclick="moveStorePosition(${store.id}, -1)" ${index === 0 ? 'disabled style="opacity:0.35; cursor:not-allowed;"' : ''}>
+                            <i data-lucide="chevron-up"></i>
+                        </button>
+                        <button class="btn-icon" onclick="moveStorePosition(${store.id}, 1)" ${index === orderedStores.length - 1 ? 'disabled style="opacity:0.35; cursor:not-allowed;"' : ''}>
+                            <i data-lucide="chevron-down"></i>
+                        </button>
+                        <button class="btn-icon" onclick="editStore(${store.id})">
+                            <i data-lucide="pencil"></i>
+                        </button>
+                        <button class="btn-icon" style="color:var(--danger);" onclick="deleteStore(${store.id})">
+                            <i data-lucide="trash-2"></i>
+                        </button>
+                    </div>
                 `;
                 list.appendChild(item);
             });
@@ -930,9 +1093,16 @@
         async function addStore() {
             const name = document.getElementById('newStoreInput').value.trim();
             if (!name) return;
+            const now = Date.now();
             
             const tx = db.transaction(['stores'], 'readwrite');
-            await tx.objectStore('stores').add({ name });
+            await tx.objectStore('stores').add({
+                name,
+                createdAt: new Date(now).toISOString(),
+                updatedAt: new Date(now).toISOString(),
+                lastUsedAt: null,
+                sortOrder: now
+            });
             
             tx.oncomplete = async () => {
                 document.getElementById('newStoreInput').value = '';
@@ -940,6 +1110,76 @@
                 openManageStores(); // Refresh list
                 showToast("Toko berhasil ditambah", "success");
             };
+        }
+
+        function onStoreDragStart(event) {
+            const id = Number(event.currentTarget.dataset.id);
+            draggedStoreId = id;
+            event.currentTarget.classList.add('dragging');
+        }
+
+        function onStoreDragOver(event) {
+            event.preventDefault();
+        }
+
+        async function onStoreDrop(event) {
+            event.preventDefault();
+            const targetId = Number(event.currentTarget.dataset.id);
+            if (!draggedStoreId || draggedStoreId === targetId) return;
+
+            const ordered = getStoresSorted().map((s) => s.id);
+            const fromIndex = ordered.indexOf(draggedStoreId);
+            const toIndex = ordered.indexOf(targetId);
+            if (fromIndex === -1 || toIndex === -1) return;
+
+            ordered.splice(fromIndex, 1);
+            ordered.splice(toIndex, 0, draggedStoreId);
+            await reorderStoresByIds(ordered);
+            openManageStores();
+        }
+
+        async function moveStorePosition(storeId, direction) {
+            const ordered = getStoresSorted().map((s) => s.id);
+            const currentIndex = ordered.indexOf(storeId);
+            if (currentIndex === -1) return;
+
+            const targetIndex = currentIndex + direction;
+            if (targetIndex < 0 || targetIndex >= ordered.length) return;
+
+            const [moved] = ordered.splice(currentIndex, 1);
+            ordered.splice(targetIndex, 0, moved);
+            await reorderStoresByIds(ordered);
+            openManageStores();
+        }
+
+        function onStoreDragEnd(event) {
+            draggedStoreId = null;
+            event.currentTarget.classList.remove('dragging');
+        }
+
+        async function editStore(id) {
+            const current = state.stores.find((s) => s.id === id);
+            if (!current) return;
+
+            const nextName = prompt("Edit nama toko:", current.name);
+            if (nextName === null) return;
+
+            const cleaned = nextName.trim();
+            if (!cleaned) return showToast("Nama toko tidak boleh kosong", "error");
+
+            const now = Date.now();
+            const updated = {
+                ...current,
+                name: cleaned,
+                updatedAt: new Date(now).toISOString(),
+                sortOrder: now
+            };
+
+            state.stores = state.stores.map((s) => (s.id === id ? updated : s));
+            await persistStores([updated]);
+            renderStoreSelector();
+            openManageStores();
+            showToast("Toko berhasil diubah", "success");
         }
 
         async function deleteStore(id) {
@@ -961,7 +1201,8 @@
         async function submitPrice() {
             const barcode = document.getElementById('barcodeInput').value.trim();
             const name = document.getElementById('productNameInput').value.trim();
-            const price = parseInt(document.getElementById('priceInput').value);
+            const rawPrice = document.getElementById('priceInput').value.replace(/\D/g, '');
+            const price = parseInt(rawPrice, 10);
             const rawStoreId = document.getElementById('selectedStoreId').value;
             const storeId = parseInt(rawStoreId);
             
@@ -987,8 +1228,9 @@
             const txPrice = db.transaction(['prices'], 'readwrite');
             txPrice.objectStore('prices').add(priceData);
             
-            txPrice.oncomplete = () => {
+            txPrice.oncomplete = async () => {
                 state.prices.push(priceData);
+                await touchStoreOrder(storeId, 'input');
                 showToast("Harga tersimpan!", "success");
                 resetForm();
                 renderRecentList(); // Update the compare list
@@ -1309,6 +1551,20 @@
         // ==========================================
         // UTILS & UI
         // ==========================================
+        function setupPriceInputFormatter() {
+            const priceInput = document.getElementById('priceInput');
+            if (!priceInput) return;
+
+            priceInput.addEventListener('input', () => {
+                const digits = priceInput.value.replace(/\D/g, '');
+                if (!digits) {
+                    priceInput.value = '';
+                    return;
+                }
+                priceInput.value = parseInt(digits, 10).toLocaleString('id-ID');
+            });
+        }
+
         function switchTab(sectionId, navEl) {
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.getElementById(sectionId).classList.add('active');
@@ -1407,6 +1663,7 @@
         // ==========================================
         document.addEventListener('DOMContentLoaded', async () => {
             lucide.createIcons();
+            setupPriceInputFormatter();
             
             try {
                 await initDB();
