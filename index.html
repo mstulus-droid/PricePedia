@@ -440,6 +440,9 @@
             color: var(--text-muted);
             display: flex;
             align-items: center;
+            padding: 4px;
+            border-radius: 8px;
+            background: rgba(255,255,255,0.04);
         }
 
         .store-drag-handle:active {
@@ -519,6 +522,38 @@
         .toast.show {
             transform: translateX(-50%) translateY(0);
             opacity: 1;
+        }
+
+        .pwa-prompt {
+            position: fixed;
+            left: 16px;
+            right: 16px;
+            bottom: 98px;
+            background: #1e293b;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 16px;
+            padding: 14px;
+            z-index: 1200;
+            box-shadow: 0 12px 26px rgba(0,0,0,0.35);
+            display: none;
+        }
+
+        .pwa-prompt.open {
+            display: block;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .pwa-prompt-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .pwa-prompt-actions .btn {
+            width: auto;
+            padding: 10px 12px;
+            border-radius: 10px;
+            font-size: 0.86rem;
         }
 
         /* Section Visibility */
@@ -754,7 +789,7 @@
                 <!-- Stores list -->
             </div>
             <p style="margin-top: 10px; font-size: 0.78rem; color: var(--text-muted);">
-                Gunakan tombol edit/hapus atau drag handle untuk geser urutan toko.
+                Drag ikon 6 titik di kiri nama toko lalu drop ke posisi yang diinginkan.
             </p>
         </div>
     </div>
@@ -781,6 +816,17 @@
         <span id="toastMessage">Berhasil disimpan</span>
     </div>
 
+    <div id="pwaPrompt" class="pwa-prompt">
+        <div style="font-weight: 700; margin-bottom: 4px;">Install PricePedia di perangkat ini</div>
+        <div style="font-size: 0.82rem; color: var(--text-muted);">Buka lebih cepat seperti aplikasi biasa, tanpa buka browser dulu.</div>
+        <div class="pwa-prompt-actions">
+            <button class="btn btn-primary" onclick="installPWA()">
+                <i data-lucide="download"></i> Install Sekarang
+            </button>
+            <button class="btn btn-secondary" onclick="dismissPwaPrompt()">Nanti</button>
+        </div>
+    </div>
+
     <script>
         // ==========================================
         // STATE & VARIABLES
@@ -797,6 +843,8 @@
         // PWA Install State
         let deferredPrompt;
         let draggedStoreId = null;
+        let isPwaInstalled = false;
+        let pwaPromptDismissed = false;
 
         // ==========================================
         // DATABASE (IndexedDB)
@@ -1050,27 +1098,20 @@
             list.innerHTML = '';
             
             const orderedStores = getStoresSorted();
-            orderedStores.forEach((store, index) => {
+            orderedStores.forEach((store) => {
                 const item = document.createElement('div');
                 item.className = 'store-manage-item';
                 item.dataset.id = String(store.id);
-                item.draggable = true;
-                item.addEventListener('dragstart', onStoreDragStart);
                 item.addEventListener('dragover', onStoreDragOver);
                 item.addEventListener('drop', onStoreDrop);
-                item.addEventListener('dragend', onStoreDragEnd);
                 item.innerHTML = `
                     <div class="store-manage-main">
-                        <span class="store-drag-handle"><i data-lucide="grip-vertical"></i></span>
+                        <span class="store-drag-handle" data-id="${store.id}" draggable="true" title="Drag untuk geser urutan">
+                            <i data-lucide="grip-vertical"></i>
+                        </span>
                         <span class="store-manage-name">${store.name}</span>
                     </div>
                     <div class="store-manage-actions">
-                        <button class="btn-icon" onclick="moveStorePosition(${store.id}, -1)" ${index === 0 ? 'disabled style="opacity:0.35; cursor:not-allowed;"' : ''}>
-                            <i data-lucide="chevron-up"></i>
-                        </button>
-                        <button class="btn-icon" onclick="moveStorePosition(${store.id}, 1)" ${index === orderedStores.length - 1 ? 'disabled style="opacity:0.35; cursor:not-allowed;"' : ''}>
-                            <i data-lucide="chevron-down"></i>
-                        </button>
                         <button class="btn-icon" onclick="editStore(${store.id})">
                             <i data-lucide="pencil"></i>
                         </button>
@@ -1080,6 +1121,10 @@
                     </div>
                 `;
                 list.appendChild(item);
+
+                const dragHandle = item.querySelector('.store-drag-handle');
+                dragHandle.addEventListener('dragstart', onStoreDragStart);
+                dragHandle.addEventListener('dragend', onStoreDragEnd);
             });
             
             lucide.createIcons();
@@ -1115,7 +1160,8 @@
         function onStoreDragStart(event) {
             const id = Number(event.currentTarget.dataset.id);
             draggedStoreId = id;
-            event.currentTarget.classList.add('dragging');
+            const row = event.currentTarget.closest('.store-manage-item');
+            if (row) row.classList.add('dragging');
         }
 
         function onStoreDragOver(event) {
@@ -1138,23 +1184,10 @@
             openManageStores();
         }
 
-        async function moveStorePosition(storeId, direction) {
-            const ordered = getStoresSorted().map((s) => s.id);
-            const currentIndex = ordered.indexOf(storeId);
-            if (currentIndex === -1) return;
-
-            const targetIndex = currentIndex + direction;
-            if (targetIndex < 0 || targetIndex >= ordered.length) return;
-
-            const [moved] = ordered.splice(currentIndex, 1);
-            ordered.splice(targetIndex, 0, moved);
-            await reorderStoresByIds(ordered);
-            openManageStores();
-        }
-
         function onStoreDragEnd(event) {
             draggedStoreId = null;
-            event.currentTarget.classList.remove('dragging');
+            const row = event.currentTarget.closest('.store-manage-item');
+            if (row) row.classList.remove('dragging');
         }
 
         async function editStore(id) {
@@ -1531,21 +1564,78 @@
         // ==========================================
         // PWA INSTALLATION
         // ==========================================
+        function detectPwaInstalled() {
+            return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+        }
+
+        function updatePwaInstallUI() {
+            const installBtn = document.getElementById('pwaInstallBtn');
+            if (!installBtn) return;
+
+            if (isPwaInstalled) {
+                installBtn.style.display = 'flex';
+                installBtn.classList.remove('pwa-install-btn');
+                installBtn.innerHTML = `<i data-lucide="check-circle"></i> Aplikasi Sudah Terpasang`;
+                hidePwaPrompt();
+                lucide.createIcons();
+                return;
+            }
+
+            installBtn.classList.add('pwa-install-btn');
+            installBtn.style.display = 'flex';
+            installBtn.innerHTML = `<i data-lucide="download"></i> Download Aplikasi (PWA)`;
+            lucide.createIcons();
+        }
+
+        function showPwaPrompt() {
+            if (isPwaInstalled || pwaPromptDismissed) return;
+            document.getElementById('pwaPrompt').classList.add('open');
+        }
+
+        function hidePwaPrompt() {
+            document.getElementById('pwaPrompt').classList.remove('open');
+        }
+
+        function dismissPwaPrompt() {
+            pwaPromptDismissed = true;
+            sessionStorage.setItem('pricepedia_pwa_prompt_dismissed', '1');
+            hidePwaPrompt();
+        }
+
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
             deferredPrompt = e;
-            // Show the install button
-            document.getElementById('pwaInstallBtn').style.display = 'flex';
+            updatePwaInstallUI();
+            showPwaPrompt();
+        });
+
+        window.addEventListener('appinstalled', () => {
+            isPwaInstalled = true;
+            deferredPrompt = null;
+            hidePwaPrompt();
+            updatePwaInstallUI();
+            showToast("PWA berhasil diinstall!", "success");
         });
 
         async function installPWA() {
-            if (!deferredPrompt) return;
+            if (isPwaInstalled) {
+                showToast("Aplikasi sudah terpasang di perangkat ini", "info");
+                return;
+            }
+
+            if (!deferredPrompt) {
+                showToast("Gunakan menu browser: Add to Home Screen", "info");
+                return;
+            }
+
             deferredPrompt.prompt();
             const { outcome } = await deferredPrompt.userChoice;
             if (outcome === 'accepted') {
-                document.getElementById('pwaInstallBtn').style.display = 'none';
+                hidePwaPrompt();
+                pwaPromptDismissed = true;
             }
             deferredPrompt = null;
+            updatePwaInstallUI();
         }
 
         // ==========================================
@@ -1658,12 +1748,28 @@
             };
         }
 
+        async function registerServiceWorker() {
+            if (!('serviceWorker' in navigator)) return;
+            try {
+                await navigator.serviceWorker.register('./sw.js');
+            } catch (error) {
+                console.warn('SW registration failed:', error);
+            }
+        }
+
         // ==========================================
         // INIT
         // ==========================================
         document.addEventListener('DOMContentLoaded', async () => {
             lucide.createIcons();
             setupPriceInputFormatter();
+            await registerServiceWorker();
+            isPwaInstalled = detectPwaInstalled();
+            pwaPromptDismissed = sessionStorage.getItem('pricepedia_pwa_prompt_dismissed') === '1';
+            updatePwaInstallUI();
+            if (!isPwaInstalled && !pwaPromptDismissed) {
+                setTimeout(showPwaPrompt, 1000);
+            }
             
             try {
                 await initDB();
